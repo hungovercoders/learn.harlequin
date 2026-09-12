@@ -1,0 +1,22 @@
+WITH daily AS (
+    SELECT
+        event_date,
+        SUM(CASE WHEN event_type = 'page_view'
+                 THEN event_count ELSE 0 END) AS page_views,
+        SUM(CASE WHEN event_type = 'purchase'
+                 THEN purchase_count ELSE 0 END) AS purchases
+    FROM read_parquet(
+        'data/summary/daily_event_summary.parquet'
+    )
+    GROUP BY event_date
+)
+SELECT
+    event_date,
+    page_views,
+    purchases,
+    CASE
+        WHEN page_views = 0 THEN 0
+        ELSE purchases * 1.0 / page_views
+    END AS purchase_rate
+FROM daily
+ORDER BY event_date;
