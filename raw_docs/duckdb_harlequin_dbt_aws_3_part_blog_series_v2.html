@@ -1,0 +1,579 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DuckDB to AWS — Three-Part Blog Series</title><style>
+:root{
+  --bg:#0b0f17;--panel:#111827;--panel2:#172033;--text:#eef2ff;--muted:#aeb8d0;
+  --accent:#bd93f9;--accent2:#50fa7b;--cyan:#8be9fd;--yellow:#f1fa8c;--pink:#ff79c6;
+  --border:#283249;--code:#080b12;--warn:#ffb86c;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:linear-gradient(180deg,#090d15,#0d1320 60%,#090d15);
+ color:var(--text);font:16px/1.58 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{width:min(1180px,92vw);margin:auto;padding:46px 0 90px}
+h1,h2,h3,h4{line-height:1.2;color:#f8f8f2} h1{font-size:clamp(2.3rem,5vw,4.5rem);margin:12px 0 18px}
+h2{font-size:1.85rem;margin-top:50px;border-top:1px solid var(--border);padding-top:30px}
+h3{margin-top:30px;color:var(--cyan)} h4{color:var(--pink)}
+p,li{color:var(--muted)} a{color:var(--cyan)} strong{color:#f8f8f2}
+.lead{font-size:1.15rem;max-width:920px}.pill{display:inline-block;padding:6px 10px;margin:0 7px 7px 0;
+ border:1px solid var(--border);background:var(--panel);border-radius:999px;color:var(--accent)}
+nav{padding:18px;background:var(--panel);border:1px solid var(--border);border-radius:14px;margin:28px 0}
+nav a{display:inline-block;margin:5px 14px 5px 0;text-decoration:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:22px 0}
+.card{background:rgba(17,24,39,.95);border:1px solid var(--border);border-radius:16px;padding:20px}
+pre{background:var(--code);border:1px solid var(--border);border-radius:12px;padding:16px;overflow:auto}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#e4e9ff}
+.diagram{background:var(--panel2);border:1px solid var(--border);border-radius:16px;padding:22px;white-space:pre;overflow:auto;
+ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent2)}
+.note,.warning,.tip{border-left:4px solid var(--accent);padding:14px 16px;border-radius:8px;margin:18px 0;background:#14182a}
+.warning{border-left-color:var(--warn)} .tip{border-left-color:var(--accent2)}
+table{width:100%;border-collapse:collapse;margin:18px 0 28px;background:var(--panel);border-radius:12px;overflow:hidden}
+th,td{padding:12px 14px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+th{background:var(--panel2);color:#f8f8f2} td{color:var(--muted)}
+.small{font-size:.92rem}.ok{color:var(--accent2)}.muted{color:var(--muted)}
+</style></head><body>
+<main class="wrap">
+<span class="pill">3-Part Blog Series</span><span class="pill">uv</span><span class="pill">DuckDB</span><span class="pill">Harlequin</span><span class="pill">dbt</span><span class="pill">AWS</span>
+<h1>From Delightful Local Data Development to AWS</h1>
+<p class="lead">A three-part progression that adds complexity only when it earns its place: DuckDB + Harlequin locally; dbt for pipeline rigour and environment abstraction; then the same system deployed against AWS S3.</p>
+
+<nav><strong>Series</strong><br>
+<a href="#part1">Part 1 — Delightful Local Development</a>
+<a href="#part2">Part 2 — dbt & Environment Rigour</a>
+<a href="#part3">Part 3 — Deploy to AWS</a>
+</nav>
+
+<div class="diagram">PART 1                    PART 2                         PART 3
+local Parquet             configurable source           S3 Parquet
+     ↓                          ↓                            ↓
+   DuckDB                  dbt + DuckDB                  same dbt DAG
+     ↓                          ↓                            ↓
+simple SQL pipeline       staging + marts + tests       DuckDB + AWS auth
+     ↓                          ↓                            ↓
+ Harlequin                Harlequin / hsql              deployed job</div>
+
+<section id="part1">
+<h2>Part 1 — DuckDB + Harlequin: Delightful Local Data Engineering</h2>
+<p><strong>Story:</strong> begin with the smallest useful stack. No dbt and no cloud. Generate representative events, query Parquet directly with DuckDB, turn useful queries into a tiny SQL pipeline, and use Harlequin as the interactive workbench.</p>
+
+<h3>1. Setup with uv</h3>
+<pre><code>uv init
+uv python pin 3.12
+uv add duckdb pandas pyarrow faker harlequin</code></pre>
+<pre><code>local-duckdb-demo/
+├── data/raw/events/
+├── sql/
+│   ├── 01_clean_events.sql
+│   └── 02_daily_summary.sql
+├── scripts/
+│   ├── generate_fake_events.py
+│   └── run_pipeline.py
+└── pyproject.toml</code></pre>
+<div class="note"><strong>Why no analytics.duckdb yet?</strong> In Part 1, Parquet is the durable storage layer and DuckDB is the query/compute engine. DuckDB can query Parquet directly, so a persistent database file is unnecessary. We introduce <code>analytics.duckdb</code> in Part 2, when dbt needs a durable catalog for stable views and other managed relations.</div>
+
+<h3>2. Parquet is storage; DuckDB is the engine</h3>
+<p>A DuckDB database file is optional. This query reads Parquet directly without importing it:</p>
+<pre><code>select * from read_parquet('data/raw/events/*.parquet');</code></pre>
+<div class="diagram">PART 1
+
+data/raw/events/*.parquet
+          │
+          ▼
+       DuckDB
+   query / transform
+          │
+          ├──────────► Harlequin
+          ▼
+data/clean/events.parquet
+          │
+          ▼
+data/summary/daily_events.parquet
+
+Durable data = Parquet
+Compute/query engine = DuckDB
+Interactive UI = Harlequin</div>
+<p>A persistent <code>analytics.duckdb</code> becomes useful when DuckDB itself should retain schemas, tables, views and catalog metadata between sessions. A table created in DuckDB stores its result in that database file; a view can retain only its query definition while continuing to read external Parquet. Part 1 deliberately stays file-first.</p>
+
+<h3>3. Generate fake events</h3>
+<pre><code>from pathlib import Path
+from datetime import datetime, timedelta, timezone
+import random, uuid
+import pandas as pd
+from faker import Faker
+
+fake = Faker()
+random.seed(42)
+Faker.seed(42)
+
+out = Path("data/raw/events")
+out.mkdir(parents=True, exist_ok=True)
+
+types = ["page_view","search","product_view","add_to_cart",
+         "checkout_started","purchase"]
+devices = ["web","ios","android"]
+customers = [f"cust_{i:05d}" for i in range(2000)]
+end = datetime.now(timezone.utc)
+start = end - timedelta(days=30)
+rows = []
+
+for _ in range(50_000):
+    event_type = random.choices(types, weights=[40,10,22,12,8,8], k=1)[0]
+    rows.append({
+        "event_id": str(uuid.uuid4()),
+        "event_timestamp": start + timedelta(
+            seconds=random.randint(0, int((end-start).total_seconds()))
+        ),
+        "customer_id": random.choice(customers),
+        "session_id": str(uuid.uuid4()),
+        "event_type": event_type,
+        "device": random.choice(devices),
+        "country": fake.country_code(),
+        "revenue": round(random.uniform(5,250),2)
+                   if event_type == "purchase" else 0.0,
+    })
+
+df = pd.DataFrame(rows)
+df["day"] = pd.to_datetime(df["event_timestamp"]).dt.date
+for day, frame in df.groupby("day"):
+    frame.drop(columns=["day"]).to_parquet(
+        out / f"events_{day}.parquet", index=False
+    )</code></pre>
+<pre><code>uv run python scripts/generate_fake_events.py</code></pre>
+
+<h3>4. Query immediately in Harlequin</h3>
+<pre><code># No persistent database is required in Part 1
+uv run harlequin</code></pre>
+<pre><code>select event_type, count(*) as events, sum(revenue) as revenue
+from read_parquet('data/raw/events/*.parquet')
+group by event_type
+order by events desc;</code></pre>
+
+<h3>5. Harlequin power-user basics</h3>
+<table><thead><tr><th>Feature</th><th>Use</th></tr></thead><tbody>
+<tr><td>Query history</td><td>Recover exploratory queries.</td></tr>
+<tr><td>Tabbed buffers</td><td>Keep raw inspection, transformations and QA open together.</td></tr>
+<tr><td>Autocomplete + formatting</td><td>Fast authoring; clean SQL before saving.</td></tr>
+<tr><td>Data Catalog</td><td>Browse relations and columns.</td></tr>
+<tr><td>Results tabs/export</td><td>Compare and save ad-hoc results.</td></tr>
+</tbody></table>
+<pre><code>Ctrl+N       New buffer
+Ctrl+O       Open file
+Ctrl+S       Save
+Ctrl+Enter   Run
+F4           Format SQL
+F6           Data Catalog
+F10          Full-screen pane
+Ctrl+B       Toggle catalog</code></pre>
+<pre><code># Check supported themes
+uv run harlequin --help
+
+# Preferred, if available in the installed version
+uv run harlequin --theme dracula analytics.duckdb
+
+# Dark alternative
+uv run harlequin --theme gruvbox analytics.duckdb</code></pre>
+
+<h3>6. A deliberately simple pipeline</h3>
+<p><code>sql/01_clean_events.sql</code> writes clean Parquet rather than importing the result into a DuckDB database:</p>
+<pre><code>COPY (
+  select
+    event_id,
+    cast(event_timestamp as timestamp) as event_timestamp,
+    cast(event_timestamp as date) as event_date,
+    customer_id, session_id,
+    lower(event_type) as event_type,
+    lower(device) as device,
+    upper(country) as country,
+    cast(revenue as double) as revenue
+  from read_parquet('data/raw/events/*.parquet')
+  where event_id is not null and customer_id is not null
+)
+TO 'data/clean/events.parquet' (FORMAT PARQUET);</code></pre>
+
+<p><code>sql/02_daily_summary.sql</code> reads that file and creates the summary data product:</p>
+<pre><code>COPY (
+  select
+    event_date, event_type, device, country,
+    count(*) as event_count,
+    count(distinct customer_id) as unique_customers,
+    count(distinct session_id) as unique_sessions,
+    sum(revenue) as revenue
+  from read_parquet('data/clean/events.parquet')
+  group by 1,2,3,4
+)
+TO 'data/summary/daily_events.parquet' (FORMAT PARQUET);</code></pre>
+
+<p><code>scripts/run_pipeline.py</code>:</p>
+<pre><code>from pathlib import Path
+import duckdb
+
+with duckdb.connect(":memory:") as con:
+    for file in ["sql/01_clean_events.sql", "sql/02_daily_summary.sql"]:
+        con.execute(Path(file).read_text())</code></pre>
+<pre><code>uv run python scripts/run_pipeline.py</code></pre>
+
+<h3>7. hsql for headless interaction</h3>
+<pre><code>uv run hsql analytics.duckdb \
+  -c "select * from daily_event_summary limit 20;"
+
+uv run hsql analytics.duckdb --csv \
+  -c "select * from daily_event_summary;"</code></pre>
+
+<div class="note"><strong>Part 1 hand-off:</strong> the stack is intentionally tiny and pleasant. As models multiply, however, the custom runner lacks a dependency graph, model tests and a clean environment boundary. Those are the reasons—not fashion—to introduce dbt in Part 2.</div>
+</section>
+
+<section id="part2">
+<h2>Part 2 — Add dbt: Pipeline Rigour and Environment Awareness</h2>
+<p><strong>Story:</strong> preserve the local DuckDB/Harlequin experience while replacing the hand-written runner with dbt. Most importantly, put physical location behind a stable dbt source so downstream SQL is environment-agnostic from day one.</p>
+
+<h3>1. Add dbt-duckdb</h3>
+<pre><code>uv add dbt-duckdb</code></pre>
+<pre><code>models/
+├── sources/raw_sources.yml
+├── staging/
+│   ├── stg_events.sql
+│   └── staging.yml
+└── marts/
+    ├── fct_daily_event_summary.sql
+    └── marts.yml
+dbt_project.yml
+profiles.yml</code></pre>
+
+<h3>2. Now <code>analytics.duckdb</code> has a purpose</h3>
+<p>Part 1 used DuckDB without a persistent database. With dbt, a persistent DuckDB catalog becomes useful because dbt creates named relations that should survive between sessions. We introduce <code>analytics.duckdb</code> here.</p>
+<div class="diagram">data/raw/events/*.parquet
+          │
+          ▼
+analytics.duckdb
+┌───────────────────────────────┐
+│ catalog + schemas             │
+│ stg_events              VIEW  │
+│ fct_daily_event_summary VIEW  │
+│ future tables/incrementals    │
+└───────────────────────────────┘
+          ▲
+         dbt</div>
+<p>The database file does not have to contain the raw rows. A dbt-created view can live in <code>analytics.duckdb</code> while its definition reads external Parquet. The file is now the persistent <strong>catalog/relation layer</strong>; Parquet can remain the physical data layer.</p>
+<div class="warning">A view over external Parquet does not copy the rows into <code>analytics.duckdb</code>; the files must still exist when queried. A dbt <code>table</code> materialization is different: its result is persisted into the DuckDB database.</div>
+
+<h3>3. Configure local DuckDB</h3>
+<p><code>dbt_project.yml</code>:</p>
+<pre><code>name: analytics_engineering
+version: "1.0.0"
+config-version: 2
+profile: analytics_engineering
+model-paths: ["models"]
+
+models:
+  analytics_engineering:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: view</code></pre>
+
+<p><code>profiles.yml</code>:</p>
+<pre><code>analytics_engineering:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local:
+      type: duckdb
+      path: analytics.duckdb
+      schema: analytics
+      threads: 4
+      extensions:
+        - parquet</code></pre>
+
+<h3>4. Stable source name, dynamic physical location</h3>
+<p><code>models/sources/raw_sources.yml</code>:</p>
+<pre><code>version: 2
+
+sources:
+  - name: raw
+    tables:
+      - name: events
+        config:
+          external_location: "{{ env_var(
+            'EVENTS_LOCATION',
+            'data/raw/events/*.parquet'
+          ) }}"</code></pre>
+
+<div class="diagram">EVENTS_LOCATION
+       ↓
+source('raw','events')       ← stable logical contract
+       ↓
+   stg_events                ← stable view
+       ↓
+fct_daily_event_summary      ← stable mart
+
+Today: data/raw/events/*.parquet
+Later: s3://bucket/raw/events/*.parquet</div>
+
+<div class="tip">Do not create <code>events_local</code> and <code>events_s3</code>. Keep infrastructure out of model names. Only the source boundary should know the physical location.</div>
+
+<h3>5. dbt creates the stable views</h3>
+<p><code>models/staging/stg_events.sql</code>:</p>
+<pre><code>{{ config(materialized='view') }}
+
+select
+  event_id,
+  cast(event_timestamp as timestamp) as event_timestamp,
+  cast(event_timestamp as date) as event_date,
+  customer_id, session_id,
+  lower(event_type) as event_type,
+  lower(device) as device,
+  upper(country) as country,
+  cast(revenue as double) as revenue
+from {{ source('raw','events') }}
+where event_id is not null and customer_id is not null</code></pre>
+
+<p><code>models/marts/fct_daily_event_summary.sql</code>:</p>
+<pre><code>{{ config(materialized='view') }}
+
+select
+  event_date, event_type, device, country,
+  count(*) as event_count,
+  count(distinct customer_id) as unique_customers,
+  count(distinct session_id) as unique_sessions,
+  sum(revenue) as revenue
+from {{ ref('stg_events') }}
+group by 1,2,3,4</code></pre>
+
+<h3>6. Add model tests</h3>
+<pre><code>version: 2
+
+models:
+  - name: stg_events
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: customer_id
+        tests: [not_null]
+      - name: event_type
+        tests:
+          - accepted_values:
+              values:
+                - page_view
+                - search
+                - product_view
+                - add_to_cart
+                - checkout_started
+                - purchase</code></pre>
+
+<h3>7. The new local loop</h3>
+<pre><code>export DBT_PROFILES_DIR="$(pwd)"
+export DBT_TARGET=local
+export EVENTS_LOCATION="data/raw/events/*.parquet"
+
+uv run dbt debug
+uv run dbt build
+uv run harlequin analytics.duckdb</code></pre>
+
+<div class="diagram">edit model → dbt build → tests → Harlequin → refine → repeat</div>
+
+<h3>8. Views, tables, incremental and external models</h3>
+<table><thead><tr><th>Type</th><th>When to use it</th></tr></thead><tbody>
+<tr><td>view</td><td>Great default for staging and lightweight marts.</td></tr>
+<tr><td>table</td><td>Persist expensive results or snapshots.</td></tr>
+<tr><td>incremental</td><td>Persisted models are too large to rebuild fully.</td></tr>
+<tr><td>external</td><td>The output contract should itself be Parquet/CSV/JSON.</td></tr>
+</tbody></table>
+
+<h3>9. DuckDB extension lifecycle and .duckdbrc</h3>
+<p><code>.duckdbrc</code> is DuckDB startup SQL, not Harlequin configuration. Use it for runtime setup in clients that honour it:</p>
+<pre><code>LOAD parquet;
+LOAD httpfs;
+LOAD aws;</code></pre>
+<p>Install separately during environment bootstrap:</p>
+<pre><code>import duckdb
+
+with duckdb.connect("analytics.duckdb") as con:
+    con.execute("INSTALL parquet")
+    con.execute("INSTALL httpfs")
+    con.execute("INSTALL aws")</code></pre>
+<div class="diagram">bootstrap: INSTALL extension  →  runtime: LOAD extension</div>
+<p>dbt-duckdb can also manage required extensions for its own connections from the dbt profile.</p>
+
+<div class="note"><strong>Part 2 hand-off:</strong> everything still works locally, but the project is already cloud-ready. The physical location is behind the dbt source contract. Part 3 should therefore be boring in the best possible way: add AWS authentication and an S3 target, change configuration, and run the same DAG.</div>
+</section>
+
+<section id="part3">
+<h2>Part 3 — Deploy the Same Pipeline to AWS</h2>
+<p><strong>Story:</strong> cash in on the abstraction from Part 2. AWS supplies storage, identity and a runtime; it does not require a second version of the data pipeline.</p>
+
+<h3>1. The transition</h3>
+<div class="diagram">LOCAL                               AWS
+data/raw/events/*.parquet           s3://bucket/raw/events/*.parquet
+           \                           /
+            \                         /
+             source('raw','events')
+                       ↓
+                  stg_events
+                       ↓
+             fct_daily_event_summary
+                       ↓
+                  same dbt build</div>
+
+<h3>2. Add an S3-capable target</h3>
+<pre><code>analytics_engineering:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local:
+      type: duckdb
+      path: analytics.duckdb
+      schema: analytics
+      threads: 4
+      extensions: [parquet]
+
+    s3:
+      type: duckdb
+      path: analytics.duckdb
+      schema: analytics
+      threads: 4
+      extensions:
+        - parquet
+        - httpfs
+        - aws
+      secrets:
+        - type: s3
+          provider: credential_chain
+          region: "{{ env_var('AWS_REGION', 'eu-west-2') }}"</code></pre>
+
+<h3>3. Authenticate and switch configuration</h3>
+<pre><code>aws sso login --profile analytics
+
+export AWS_PROFILE=analytics
+export AWS_REGION=eu-west-2
+export DBT_PROFILES_DIR="$(pwd)"
+export DBT_TARGET=s3
+export EVENTS_LOCATION="s3://my-data-platform/raw/events/*.parquet"
+
+uv run dbt debug
+uv run dbt build</code></pre>
+
+<div class="tip">No staging or mart SQL changes. That is the payoff of putting environment differences at the boundary in Part 2.</div>
+
+<h3>4. Make outputs dynamic too</h3>
+<pre><code>{{
+  config(
+    materialized='external',
+    format='parquet',
+    location=env_var(
+      'SUMMARY_LOCATION',
+      'data/exports/daily_event_summary.parquet'
+    )
+  )
+}}
+
+select *
+from {{ ref('fct_daily_event_summary') }}</code></pre>
+
+<pre><code># Local
+export SUMMARY_LOCATION="data/exports/daily_event_summary.parquet"
+
+# AWS
+export SUMMARY_LOCATION="s3://my-data-platform/summary/daily_event_summary.parquet"</code></pre>
+
+<h3>5. AWS IAM: least privilege</h3>
+<pre><code>{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::my-data-platform",
+      "Condition": {
+        "StringLike": {"s3:prefix": ["raw/events/*"]}
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::my-data-platform/raw/events/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "arn:aws:s3:::my-data-platform/summary/*"
+    }
+  ]
+}</code></pre>
+
+<div class="warning">Never commit AWS keys to SQL, <code>profiles.yml</code>, <code>.duckdbrc</code>, Docker images or Git. Use SSO for humans and IAM roles/OIDC/temporary credentials for deployed workloads.</div>
+
+<h3>6. Deploy a job, not a database server</h3>
+<p>DuckDB is embedded. The production unit can be a container/job whose meaningful application command is simply:</p>
+<pre><code>uv sync --frozen
+uv run dbt build</code></pre>
+
+<p>A minimal uv-based image:</p>
+<pre><code>FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
+COPY . .
+CMD ["uv", "run", "dbt", "build"]</code></pre>
+
+<p>Run that image using your organisation's existing AWS job/container platform and attach an IAM role rather than developer credentials.</p>
+
+<h3>7. Keep the developer tools</h3>
+<p>Harlequin remains useful for authenticated investigation of the resulting DuckDB views; hsql remains useful for small operational smoke checks.</p>
+<pre><code>uv run hsql analytics.duckdb \
+  -c "select max(event_date) from analytics.fct_daily_event_summary;"
+
+uv run harlequin --theme dracula analytics.duckdb</code></pre>
+
+<h3>8. Final architecture</h3>
+<div class="diagram">uv
+ │
+ ├── DuckDB engine
+ ├── dbt DAG + tests + environment contracts
+ ├── Harlequin interactive development
+ └── hsql headless checks
+          │
+          ▼
+ source('raw','events')
+          │
+    ┌─────┴─────┐
+    ▼           ▼
+ local        AWS S3
+Parquet       Parquet
+    └─────┬─────┘
+          ▼
+    stable models
+          ▼
+ local or S3 outputs</div>
+
+<h3>9. Series takeaway</h3>
+<table><thead><tr><th>Part</th><th>What we add</th><th>Why</th></tr></thead><tbody>
+<tr><td>1</td><td>DuckDB + Parquet + Harlequin</td><td>Fast, enjoyable local development.</td></tr>
+<tr><td>2</td><td>dbt</td><td>Tests, dependencies, lineage and environment abstraction.</td></tr>
+<tr><td>3</td><td>AWS S3 + IAM + runtime</td><td>Cloud storage and execution without rewriting the pipeline.</td></tr>
+</tbody></table>
+
+<div class="note"><strong>Core principle:</strong> make local development excellent first, add pipeline structure when it solves a real problem, and make cloud deployment a configuration change rather than an architectural rewrite.</div>
+</section>
+
+<h2>Appendix — the whole journey in commands</h2>
+<pre><code># Part 1
+uv init
+uv python pin 3.12
+uv add duckdb pandas pyarrow faker harlequin
+uv run python scripts/generate_fake_events.py
+uv run python scripts/run_pipeline.py
+uv run harlequin
+
+# Part 2
+uv add dbt-duckdb
+export DBT_PROFILES_DIR="$(pwd)"
+export DBT_TARGET=local
+export EVENTS_LOCATION="data/raw/events/*.parquet"
+uv run dbt build
+
+# Part 3
+aws sso login --profile analytics
+export AWS_PROFILE=analytics
+export AWS_REGION=eu-west-2
+export DBT_TARGET=s3
+export EVENTS_LOCATION="s3://my-data-platform/raw/events/*.parquet"
+uv run dbt build</code></pre>
+</main>
+</body></html>
