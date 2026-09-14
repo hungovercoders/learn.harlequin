@@ -1,0 +1,12 @@
+name: analytics_engineering
+version: "1.0.0"
+config-version: 2
+profile: analytics_engineering
+model-paths: ["models"]
+
+models:
+  analytics_engineering:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: view

@@ -1,0 +1,10 @@
+analytics_engineering:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local:
+      type: duckdb
+      path: analytics.duckdb
+      schema: analytics
+      threads: 4
+      extensions:
+        - parquet

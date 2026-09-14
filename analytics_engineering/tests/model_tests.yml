@@ -1,0 +1,19 @@
+version: 2
+
+models:
+  - name: stg_events
+    columns:
+      - name: event_id
+        tests: [not_null, unique]
+      - name: customer_id
+        tests: [not_null]
+      - name: event_type
+        tests:
+          - accepted_values:
+              values:
+                - page_view
+                - search
+                - product_view
+                - add_to_cart
+                - checkout_started
+                - purchase
