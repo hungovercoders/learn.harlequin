@@ -20,7 +20,22 @@ types = [
     "purchase",
 ]
 devices = ["web", "ios", "android"]
-customers = [f"cust_{i:05d}" for i in range(2000)]
+
+# Our shop sells Tiny Rebel craft beer by the case.
+beers = [
+    "Cwtch",
+    "Stay Puft",
+    "Clwb Tropica",
+    "Easy Livin",
+    "Hank",
+    "Fubar",
+    "Juicy",
+    "Dutty",
+]
+# Events tied to a specific beer carry a product; browsing and searching don't.
+product_events = {"product_view", "add_to_cart", "checkout_started", "purchase"}
+
+customers = [f"drinker_{i:05d}" for i in range(2000)]
 end = datetime.now(timezone.utc)
 start = end - timedelta(days=30)
 rows = []
@@ -35,10 +50,11 @@ for _ in range(50_000):
             "customer_id": random.choice(customers),
             "session_id": str(uuid.uuid4()),
             "event_type": event_type,
+            "beer": random.choice(beers) if event_type in product_events else None,
             "device": random.choice(devices),
             "country": fake.country_code(),
             "revenue": (
-                round(random.uniform(5, 250), 2) if event_type == "purchase" else 0.0
+                round(random.uniform(12, 65), 2) if event_type == "purchase" else 0.0
             ),
         }
     )

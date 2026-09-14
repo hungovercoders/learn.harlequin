@@ -5,6 +5,7 @@ COPY (
     cast(event_timestamp as date) as event_date,
     customer_id, session_id,
     lower(event_type) as event_type,
+    beer,
     lower(device) as device,
     upper(country) as country,
     cast(revenue as double) as revenue
