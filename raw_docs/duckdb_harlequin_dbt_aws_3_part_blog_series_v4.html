@@ -224,18 +224,41 @@ uv run hsql analytics.duckdb --csv \
 <h2>Part 2 — Add dbt: Pipeline Rigour and Environment Awareness</h2>
 <p><strong>Story:</strong> preserve the local DuckDB/Harlequin experience while replacing the hand-written runner with dbt. Most importantly, put physical location behind a stable dbt source so downstream SQL is environment-agnostic from day one.</p>
 
-<h3>1. Add dbt-duckdb</h3>
-<pre><code>uv add dbt-duckdb</code></pre>
+<h3>1. Add dbt-duckdb and let dbt scaffold the project</h3>
+<p>Rather than manually creating every dbt file from scratch, start with dbt's own initializer:</p>
+<pre><code>uv add dbt-duckdb
+uv run dbt init</code></pre>
+<p>Because <code>dbt-duckdb</code> is installed inside the uv environment, DuckDB is available as the adapter during initialization. dbt will scaffold the project structure and create files such as <code>dbt_project.yml</code> and example models.</p>
+<div class="note"><strong>Important:</strong> do not assume <code>dbt init</code> creates a project-local <code>profiles.yml</code>. dbt treats profiles as separate runtime/connection configuration. In this tutorial we create <code>profiles.yml</code> ourselves so the local-to-AWS environment switch is visible and easy to follow.</div>
+<div class="note"><strong>Why use <code>dbt init</code>?</strong> It teaches the normal dbt workflow and gives us a valid project skeleton. We then reshape that generated project to match the architecture from this series rather than pretending all of the files appeared manually.</div>
+<p>After initialization, expect something broadly like:</p>
+<pre><code>analytics_engineering/
+├── dbt_project.yml
+├── models/
+│   └── example/
+│       ├── my_first_dbt_model.sql
+│       ├── my_second_dbt_model.sql
+│       └── schema.yml
+└── ...</code></pre>
+
+<table><thead><tr><th>File</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>dbt_project.yml</code></td><td>Project configuration: model paths, materializations, naming and project-level settings.</td></tr>
+<tr><td><code>profiles.yml</code></td><td>Runtime/connection configuration: adapter, DuckDB file, targets, extensions and later AWS settings. We create this ourselves.</td></tr>
+</tbody></table>
+<p>We will remove the example models and replace them with a structure that separates external sources, staging and marts:</p>
 <pre><code>models/
-├── sources/raw_sources.yml
+├── sources/
+│   └── raw_sources.yml
 ├── staging/
 │   ├── stg_events.sql
 │   └── staging.yml
 └── marts/
     ├── fct_daily_event_summary.sql
     └── marts.yml
+
 dbt_project.yml
 profiles.yml</code></pre>
+<div class="warning"><strong>Generated does not mean final.</strong> The point of this tutorial is an environment-aware project. We deliberately edit the generated dbt configuration so the same model SQL can point at local Parquet in development and S3 later.</div>
 
 <h3>2. Now <code>analytics.duckdb</code> has a purpose</h3>
 <p>Part 1 used DuckDB without a persistent database. With dbt, a persistent DuckDB catalog becomes useful because dbt creates named relations that should survive between sessions. We introduce <code>analytics.duckdb</code> here.</p>
@@ -254,7 +277,18 @@ analytics.duckdb
 <p>The database file does not have to contain the raw rows. A dbt-created view can live in <code>analytics.duckdb</code> while its definition reads external Parquet. The file is now the persistent <strong>catalog/relation layer</strong>; Parquet can remain the physical data layer.</p>
 <div class="warning">A view over external Parquet does not copy the rows into <code>analytics.duckdb</code>; the files must still exist when queried. A dbt <code>table</code> materialization is different: its result is persisted into the DuckDB database.</div>
 
-<h3>3. Configure local DuckDB</h3>
+<h3>3. Create the project-local profile deliberately</h3>
+<p><code>dbt init</code> has scaffolded the project, but for this tutorial we now create the runtime profile ourselves:</p>
+<pre><code>touch profiles.yml</code></pre>
+
+<p>Then tell dbt to look for its profile in the current project directory:</p>
+<pre><code>export DBT_PROFILES_DIR="$(pwd)"</code></pre>
+
+<p>This is a deliberate tutorial choice. Keeping <code>profiles.yml</code> beside the project makes the local and AWS targets easy to compare later. The file should contain configuration only—never long-lived credentials. AWS authentication in Part 3 will come from the normal AWS credential chain.</p>
+
+<p>At this point, delete the generated example models so they do not distract from the pipeline we are actually building:</p>
+<pre><code>rm -rf models/example</code></pre>
+<h3>4. Configure local DuckDB</h3>
 <p><code>dbt_project.yml</code>:</p>
 <pre><code>name: analytics_engineering
 version: "1.0.0"
@@ -281,7 +315,7 @@ models:
       extensions:
         - parquet</code></pre>
 
-<h3>4. Stable source name, dynamic physical location</h3>
+<h3>5. Stable source name, dynamic physical location</h3>
 <p><code>models/sources/raw_sources.yml</code>:</p>
 <pre><code>version: 2
 
@@ -308,7 +342,7 @@ Later: s3://bucket/raw/events/*.parquet</div>
 
 <div class="tip">Do not create <code>events_local</code> and <code>events_s3</code>. Keep infrastructure out of model names. Only the source boundary should know the physical location.</div>
 
-<h3>5. dbt creates the stable views</h3>
+<h3>6. dbt creates the stable views</h3>
 <p><code>models/staging/stg_events.sql</code>:</p>
 <pre><code>{{ config(materialized='view') }}
 
@@ -336,7 +370,7 @@ select
 from {{ ref('stg_events') }}
 group by 1,2,3,4</code></pre>
 
-<h3>6. Add model tests</h3>
+<h3>7. Add model tests</h3>
 <pre><code>version: 2
 
 models:
@@ -357,7 +391,7 @@ models:
                 - checkout_started
                 - purchase</code></pre>
 
-<h3>7. The new local loop</h3>
+<h3>8. The new local loop</h3>
 <pre><code>export DBT_PROFILES_DIR="$(pwd)"
 export DBT_TARGET=local
 export EVENTS_LOCATION="data/raw/events/*.parquet"
@@ -368,7 +402,7 @@ uv run harlequin analytics.duckdb</code></pre>
 
 <div class="diagram">edit model → dbt build → tests → Harlequin → refine → repeat</div>
 
-<h3>8. Views, tables, incremental and external models</h3>
+<h3>9. Views, tables, incremental and external models</h3>
 <table><thead><tr><th>Type</th><th>When to use it</th></tr></thead><tbody>
 <tr><td>view</td><td>Great default for staging and lightweight marts.</td></tr>
 <tr><td>table</td><td>Persist expensive results or snapshots.</td></tr>
@@ -376,7 +410,7 @@ uv run harlequin analytics.duckdb</code></pre>
 <tr><td>external</td><td>The output contract should itself be Parquet/CSV/JSON.</td></tr>
 </tbody></table>
 
-<h3>9. DuckDB extension lifecycle and .duckdbrc</h3>
+<h3>10. DuckDB extension lifecycle and .duckdbrc</h3>
 <p><code>.duckdbrc</code> is DuckDB startup SQL, not Harlequin configuration. Use it for runtime setup in clients that honour it:</p>
 <pre><code>LOAD parquet;
 LOAD httpfs;
@@ -563,6 +597,8 @@ uv run harlequin
 
 # Part 2
 uv add dbt-duckdb
+uv run dbt init
+# remove generated example models and customise dbt_project.yml/profiles.yml
 export DBT_PROFILES_DIR="$(pwd)"
 export DBT_TARGET=local
 export EVENTS_LOCATION="data/raw/events/*.parquet"
