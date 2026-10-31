@@ -3,8 +3,8 @@ beer_sales:
   outputs:
     local:
       type: duckdb
-      path: beer_sales.duckdb
-      schema: main
+      path: beers.duckdb
+      schema: beer_sales
       threads: 4
       extensions:
         - parquet
