@@ -5,7 +5,4 @@ sources:
     tables:
       - name: events
         config:
-          external_location: "{{ env_var(
-            'EVENTS_LOCATION',
-            '/../data/raw/events/*.parquet'
-          ) }}"
+          external_location: "{{ env_var('EVENTS_LOCATION', '../data/raw/events/*.parquet') }}"

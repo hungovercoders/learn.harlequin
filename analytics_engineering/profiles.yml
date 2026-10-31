@@ -4,7 +4,7 @@ analytics_engineering:
     local:
       type: duckdb
       path: analytics.duckdb
-      schema: analytics
+      schema: main
       threads: 4
       extensions:
         - parquet
