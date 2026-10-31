@@ -1,0 +1,10 @@
+beer_sales:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+    local:
+      type: duckdb
+      path: beers.duckdb
+      schema: beer_sales
+      threads: 4
+      extensions:
+        - parquet

@@ -1,0 +1,13 @@
+version: 2
+
+models:
+  - name: fct_daily_event_summary
+    columns:
+      - name: event_date
+        data_tests: [not_null]
+      - name: beer
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('beers')
+                field: beer

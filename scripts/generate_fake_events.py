@@ -32,6 +32,8 @@ beers = [
     "Juicy",
     "Dutty",
 ]
+# Clwb Tropica is deceptively strong and goes down easy, so it outsells the rest.
+beer_weights = [1, 1, 2, 1, 1, 1, 1, 1]
 # Events tied to a specific beer carry a product; browsing and searching don't.
 product_events = {"product_view", "add_to_cart", "checkout_started", "purchase"}
 
@@ -50,7 +52,9 @@ for _ in range(50_000):
             "customer_id": random.choice(customers),
             "session_id": str(uuid.uuid4()),
             "event_type": event_type,
-            "beer": random.choice(beers) if event_type in product_events else None,
+            "beer": random.choices(beers, weights=beer_weights, k=1)[0]
+            if event_type in product_events
+            else None,
             "device": random.choice(devices),
             "country": fake.country_code(),
             "revenue": (

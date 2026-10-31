@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    tables:
+      - name: events
+        config:
+          external_location: "{{ env_var('EVENTS_LOCATION', '../data/raw/events/*.parquet') }}"
+        columns:
+          - name: event_id
+            data_tests: [not_null]
+          - name: customer_id
+            data_tests: [not_null]
