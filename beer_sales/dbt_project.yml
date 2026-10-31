@@ -1,11 +1,11 @@
-name: analytics_engineering
+name: beer_sales
 version: "1.0.0"
 config-version: 2
-profile: analytics_engineering
+profile: beer_sales
 model-paths: ["models"]
 
 models:
-  analytics_engineering:
+  beer_sales:
     staging:
       +materialized: view
     marts:

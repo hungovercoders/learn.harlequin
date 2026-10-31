@@ -1,9 +1,9 @@
-analytics_engineering:
+beer_sales:
   target: "{{ env_var('DBT_TARGET', 'local') }}"
   outputs:
     local:
       type: duckdb
-      path: analytics.duckdb
+      path: beer_sales.duckdb
       schema: main
       threads: 4
       extensions:
