@@ -43,6 +43,12 @@ variable "schedule" {
   default     = "cron(0 6 * * ? *)"
 }
 
+variable "alert_email" {
+  description = "Email address told when the job fails; leave empty to create the topic with no subscriber"
+  type        = string
+  default     = ""
+}
+
 locals {
   name             = "beer-sales"
   events_location  = "s3://${var.bucket_name}/raw/events/*.parquet"
@@ -266,6 +272,75 @@ resource "aws_scheduler_schedule" "job" {
   }
 }
 
+# --- Failure notifications ---------------------------------------------------
+# dbt build exits non-zero when a model or test fails, so the container's exit
+# code is the signal. A task that never started has no exit code, only a stop code.
+
+resource "aws_sns_topic" "alerts" {
+  name = "${local.name}-alerts"
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  count = var.alert_email == "" ? 0 : 1
+
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+resource "aws_cloudwatch_event_rule" "job_failed" {
+  name        = "${local.name}-failed"
+  description = "The beer sales dbt job stopped with a non-zero exit code or failed to start"
+
+  event_pattern = jsonencode({
+    source      = ["aws.ecs"]
+    detail-type = ["ECS Task State Change"]
+    detail = {
+      clusterArn = [aws_ecs_cluster.this.arn]
+      lastStatus = ["STOPPED"]
+      "$or" = [
+        { containers = { exitCode = [{ anything-but = 0 }] } },
+        { stopCode = ["TaskFailedToStart"] },
+      ]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "job_failed" {
+  rule = aws_cloudwatch_event_rule.job_failed.name
+  arn  = aws_sns_topic.alerts.arn
+
+  input_transformer {
+    input_paths = {
+      task   = "$.detail.taskArn"
+      code   = "$.detail.stopCode"
+      reason = "$.detail.stoppedReason"
+    }
+    input_template = "\"The beer-sales dbt job failed. Stop code: <code>. Reason: <reason>. Task: <task>. Logs are in the ${aws_cloudwatch_log_group.job.name} log group.\""
+  }
+}
+
+data "aws_iam_policy_document" "alerts" {
+  statement {
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_cloudwatch_event_rule.job_failed.arn]
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "alerts" {
+  arn    = aws_sns_topic.alerts.arn
+  policy = data.aws_iam_policy_document.alerts.json
+}
+
 # --- Outputs -----------------------------------------------------------------
 
 output "bucket" {
@@ -274,6 +349,10 @@ output "bucket" {
 
 output "ecr_repository_url" {
   value = aws_ecr_repository.job.repository_url
+}
+
+output "alerts_topic_arn" {
+  value = aws_sns_topic.alerts.arn
 }
 
 output "events_location" {
