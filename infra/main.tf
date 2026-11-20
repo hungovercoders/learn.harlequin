@@ -5,10 +5,18 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    awscc = {
+      source  = "hashicorp/awscc"
+      version = "~> 1.0"
+    }
   }
 }
 
 provider "aws" {
+  region = var.region
+}
+
+provider "awscc" {
   region = var.region
 }
 
@@ -43,13 +51,16 @@ locals {
 
 # --- Storage -----------------------------------------------------------------
 
-resource "aws_s3_bucket" "data" {
-  bucket        = var.bucket_name
-  force_destroy = true
+# Made through Cloud Control rather than aws_s3_bucket, which reads the bucket's
+# tags through S3 Control. AWS Emulator does not serve that, so the plain
+# resource never finishes there. This one applies to the emulator and to AWS.
+# It has no force_destroy: empty the bucket before a terraform destroy.
+resource "awscc_s3_bucket" "data" {
+  bucket_name = var.bucket_name
 }
 
 resource "aws_s3_bucket_public_access_block" "data" {
-  bucket                  = aws_s3_bucket.data.id
+  bucket                  = awscc_s3_bucket.data.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -100,7 +111,7 @@ resource "aws_iam_role" "task" {
 data "aws_iam_policy_document" "task" {
   statement {
     actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.data.arn]
+    resources = [awscc_s3_bucket.data.arn]
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
@@ -110,12 +121,12 @@ data "aws_iam_policy_document" "task" {
 
   statement {
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.data.arn}/raw/events/*"]
+    resources = ["${awscc_s3_bucket.data.arn}/raw/events/*"]
   }
 
   statement {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"]
-    resources = ["${aws_s3_bucket.data.arn}/summary/*"]
+    resources = ["${awscc_s3_bucket.data.arn}/summary/*"]
   }
 }
 
@@ -258,7 +269,7 @@ resource "aws_scheduler_schedule" "job" {
 # --- Outputs -----------------------------------------------------------------
 
 output "bucket" {
-  value = aws_s3_bucket.data.bucket
+  value = awscc_s3_bucket.data.bucket_name
 }
 
 output "ecr_repository_url" {
