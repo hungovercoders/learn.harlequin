@@ -8,3 +8,16 @@ beer_sales:
       threads: 4
       extensions:
         - parquet
+    s3:
+      type: duckdb
+      path: beers.duckdb
+      schema: beer_sales
+      threads: 4
+      extensions:
+        - parquet
+        - httpfs
+        - aws
+      secrets:
+        - type: s3
+          provider: credential_chain
+          region: "{{ env_var('AWS_REGION', 'eu-west-2') }}"
