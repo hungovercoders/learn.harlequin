@@ -12,6 +12,9 @@
 #   AWS_REGION    where to deploy (default eu-west-2)
 #   ALERT_EMAIL   who is told when the job fails; give it on every deploy
 #   BUCKET_NAME   a bucket name of your own (default beer-sales-<account id>-<region>)
+#
+# The report from run and break has the account id and alert email swapped for
+# stand-ins, so it is safe to screenshot. Terraform and docker output is not.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,8 +32,25 @@ if [ -n "${BUCKET_NAME:-}" ]; then VARS+=(-var "bucket_name=$BUCKET_NAME"); fi
 tf() { terraform -chdir=infra "$@"; }
 out() { tf output -raw "$1"; }
 
+account() { aws sts get-caller-identity --query Account --output text; }
+
+# What this script prints ends up in screenshots, so the account id and the
+# alert email are swapped for stand-ins on the way out.
+scrub() {
+  local id
+  id="$(account)"
+  if [ -n "${ALERT_EMAIL:-}" ]; then
+    sed -e "s/$id/123456789012/g" -e "s/$ALERT_EMAIL/me@example.com/g"
+  else
+    sed -e "s/$id/123456789012/g"
+  fi
+}
+
 whoami_aws() {
-  echo "AWS account $(aws sts get-caller-identity --query Account --output text), region $REGION"
+  local id
+  id="$(account)"
+  # Enough to tell accounts apart, not enough to give one away.
+  echo "AWS account ending ${id: -4}, region $REGION"
 }
 
 push_image() {
@@ -51,9 +71,9 @@ deploy() {
   uv run python scripts/generate_fake_events.py
   aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   echo
-  echo "Deployed. Bucket: $(out bucket)"
+  echo "Deployed. Bucket: $(out bucket)" | scrub
   if [ -n "${ALERT_EMAIL:-}" ]; then
-    echo "Confirm the subscription email AWS sent to $ALERT_EMAIL, or no alerts will arrive."
+    echo "Confirm the subscription email AWS sent you, or no alerts will arrive."
   else
     echo "No ALERT_EMAIL was given, so nobody is told when the job fails."
   fi
@@ -75,16 +95,18 @@ run() {
   code="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" \
     --query 'tasks[0].containers[0].exitCode' --output text)"
 
-  echo
-  echo "--- dbt log ($group) ---"
-  aws logs get-log-events --log-group-name "$group" --log-stream-name "dbt/dbt/$id" \
-    --start-from-head --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' \
-    || echo "(no log stream - the task never started)"
-  echo
-  echo "--- summary in s3://$bucket/summary/ ---"
-  aws s3 ls "s3://$bucket/summary/" || echo "(nothing there yet)"
-  echo
-  echo "Task stopped: $status"
+  {
+    echo
+    echo "--- dbt log ($group) ---"
+    aws logs get-log-events --log-group-name "$group" --log-stream-name "dbt/dbt/$id" \
+      --start-from-head --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' \
+      || echo "(no log stream - the task never started)"
+    echo
+    echo "--- summary in s3://$bucket/summary/ ---"
+    aws s3 ls "s3://$bucket/summary/" || echo "(nothing there yet)"
+    echo
+    echo "Task stopped: $status"
+  } | scrub
   if [ "$code" = "0" ]; then
     echo "Exit code 0 - the job passed"
   else
@@ -106,7 +128,7 @@ break_it() {
   cp "$keep" "$seed"
   run || true
   echo
-  echo "That failure should reach ${ALERT_EMAIL:-the alerts topic} within a few minutes."
+  echo "That failure should reach the alert email within a few minutes."
   echo "Next: scripts/aws.sh fix"
 }
 
@@ -122,5 +144,5 @@ case "${1:-}" in
   break) break_it ;;
   fix) push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
   destroy) destroy ;;
-  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
