@@ -14,6 +14,11 @@ terraform {
 
 provider "aws" {
   region = var.region
+
+  # Every resource that can carry tags gets these, which is what the resource group below finds.
+  default_tags {
+    tags = local.tags
+  }
 }
 
 provider "awscc" {
@@ -44,6 +49,12 @@ variable "schedule" {
   default     = "cron(0 6 * * ? *)"
 }
 
+variable "environment" {
+  description = "Which environment this is, used as a tag on every resource"
+  type        = string
+  default     = "production"
+}
+
 variable "alert_email" {
   description = "Email address told when the job fails; leave empty to create the topic with no subscriber"
   type        = string
@@ -54,10 +65,34 @@ data "aws_caller_identity" "current" {}
 
 locals {
   name = "beer-sales"
+  tags = {
+    project     = local.name
+    environment = var.environment
+    managed-by  = "terraform"
+  }
   # Bucket names are global. The account id and region make one nobody else has.
   bucket           = var.bucket_name != "" ? var.bucket_name : "${local.name}-${data.aws_caller_identity.current.account_id}-${var.region}"
   events_location  = "s3://${local.bucket}/raw/events/*.parquet"
   summary_location = "s3://${local.bucket}/summary/daily_event_summary.parquet"
+}
+
+# --- One place to see it all -------------------------------------------------
+# A resource group is a saved search: everything tagged as this project in this
+# environment, on one page of the console.
+
+resource "aws_resourcegroups_group" "this" {
+  name        = "${local.name}-${var.environment}"
+  description = "Everything that makes up the beer sales dbt job in ${var.environment}"
+
+  resource_query {
+    query = jsonencode({
+      ResourceTypeFilters = ["AWS::AllSupported"]
+      TagFilters = [
+        { Key = "project", Values = [local.name] },
+        { Key = "environment", Values = [var.environment] },
+      ]
+    })
+  }
 }
 
 # --- Storage -----------------------------------------------------------------
@@ -68,6 +103,8 @@ locals {
 # It has no force_destroy: empty the bucket before a terraform destroy.
 resource "awscc_s3_bucket" "data" {
   bucket_name = local.bucket
+  # Cloud Control has no default tags: they are given by name.
+  tags = [for key, value in local.tags : { key = key, value = value }]
 }
 
 resource "aws_s3_bucket_public_access_block" "data" {
@@ -350,6 +387,10 @@ resource "aws_sns_topic_policy" "alerts" {
 
 output "bucket" {
   value = awscc_s3_bucket.data.bucket_name
+}
+
+output "resource_group" {
+  value = aws_resourcegroups_group.this.name
 }
 
 output "cluster" {

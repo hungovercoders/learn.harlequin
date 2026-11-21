@@ -6,6 +6,7 @@
 #   scripts/aws.sh run       run the job now, wait for it, show its log and the summary file
 #   scripts/aws.sh break     ship an image with a failing test and run it, to prove the alert
 #   scripts/aws.sh fix       ship the good image again
+#   scripts/aws.sh resources list everything in the environment's resource group
 #   scripts/aws.sh destroy   empty the bucket and remove everything
 #
 # Optional settings, as environment variables:
@@ -132,6 +133,14 @@ break_it() {
   echo "Next: scripts/aws.sh fix"
 }
 
+resources() {
+  local group
+  group="$(out resource_group)"
+  echo "--- resource group $group ---"
+  aws resource-groups list-group-resources --group-name "$group" \
+    --query 'Resources[].Identifier.[ResourceType,ResourceArn]' --output text | sort | scrub
+}
+
 destroy() {
   whoami_aws
   aws s3 rm "s3://$(out bucket)" --recursive --only-show-errors
@@ -143,6 +152,7 @@ case "${1:-}" in
   run) run ;;
   break) break_it ;;
   fix) push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
+  resources) resources ;;
   destroy) destroy ;;
-  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
