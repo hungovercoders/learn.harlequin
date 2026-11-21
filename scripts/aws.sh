@@ -69,8 +69,10 @@ deploy() {
   tf init -input=false
   tf apply "${VARS[@]}"
   push_image
-  rm -rf data/raw/events
-  uv run python scripts/generate_fake_events.py
+  # The same events as the laptop and the emulator, so all three can be compared.
+  if [ ! -d data/raw/events ]; then
+    uv run python scripts/generate_fake_events.py
+  fi
   aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   echo
   echo "Deployed. Bucket: $(out bucket)" | scrub
