@@ -29,3 +29,6 @@ data/
 *.tfstate
 *.tfstate.*
 *.tfvars
+
+# Tools the scripts download
+.tools/
