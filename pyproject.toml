@@ -1,7 +1,7 @@
 [project]
 name = "learn-harlequin"
 version = "0.1.0"
-description = "Add your description here"
+description = "A craft beer shop pipeline with DuckDB, Harlequin and dbt, run on a laptop, on AWS Emulator and as a scheduled Fargate job"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
