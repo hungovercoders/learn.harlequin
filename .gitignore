@@ -24,3 +24,8 @@ data/
 .DS_Store
 .vscode/
 .idea/
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

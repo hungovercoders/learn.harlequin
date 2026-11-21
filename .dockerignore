@@ -1,0 +1,12 @@
+.git
+.venv
+data
+docs
+raw_docs
+**/*.duckdb
+**/*.duckdb.wal
+**/target
+**/logs
+**/dbt_packages
+**/.env
+**/.user.yml
