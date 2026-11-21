@@ -27,8 +27,9 @@ variable "region" {
 }
 
 variable "bucket_name" {
-  description = "Globally unique name for the S3 bucket holding raw events and the summary export"
+  description = "Name for the S3 bucket holding raw events and the summary export; leave empty for one made from the account id and region"
   type        = string
+  default     = ""
 }
 
 variable "image_tag" {
@@ -49,10 +50,14 @@ variable "alert_email" {
   default     = ""
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  name             = "beer-sales"
-  events_location  = "s3://${var.bucket_name}/raw/events/*.parquet"
-  summary_location = "s3://${var.bucket_name}/summary/daily_event_summary.parquet"
+  name = "beer-sales"
+  # Bucket names are global. The account id and region make one nobody else has.
+  bucket           = var.bucket_name != "" ? var.bucket_name : "${local.name}-${data.aws_caller_identity.current.account_id}-${var.region}"
+  events_location  = "s3://${local.bucket}/raw/events/*.parquet"
+  summary_location = "s3://${local.bucket}/summary/daily_event_summary.parquet"
 }
 
 # --- Storage -----------------------------------------------------------------
@@ -62,7 +67,7 @@ locals {
 # resource never finishes there. This one applies to the emulator and to AWS.
 # It has no force_destroy: empty the bucket before a terraform destroy.
 resource "awscc_s3_bucket" "data" {
-  bucket_name = var.bucket_name
+  bucket_name = local.bucket
 }
 
 resource "aws_s3_bucket_public_access_block" "data" {
@@ -345,6 +350,14 @@ resource "aws_sns_topic_policy" "alerts" {
 
 output "bucket" {
   value = awscc_s3_bucket.data.bucket_name
+}
+
+output "cluster" {
+  value = aws_ecs_cluster.this.name
+}
+
+output "log_group" {
+  value = aws_cloudwatch_log_group.job.name
 }
 
 output "ecr_repository_url" {

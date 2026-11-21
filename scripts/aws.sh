@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Deploy, run, break and remove the beer sales job on a real AWS account.
+# Log in to AWS first, then from anywhere in the repo:
+#
+#   scripts/aws.sh deploy    infrastructure, image and events
+#   scripts/aws.sh run       run the job now, wait for it, show its log and the summary file
+#   scripts/aws.sh break     ship an image with a failing test and run it, to prove the alert
+#   scripts/aws.sh fix       ship the good image again
+#   scripts/aws.sh destroy   empty the bucket and remove everything
+#
+# Optional settings, as environment variables:
+#   AWS_REGION    where to deploy (default eu-west-2)
+#   ALERT_EMAIL   who is told when the job fails; give it on every deploy
+#   BUCKET_NAME   a bucket name of your own (default beer-sales-<account id>-<region>)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+if [ -n "${AWS_ENDPOINT_URL:-}" ]; then
+  echo "AWS_ENDPOINT_URL is set ($AWS_ENDPOINT_URL), so this shell is pointed at an emulator."
+  echo "Open a fresh terminal for the real account."
+  exit 1
+fi
+
+REGION="${AWS_REGION:-eu-west-2}"
+export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION" AWS_PAGER=""
+VARS=(-var "region=$REGION" -var "alert_email=${ALERT_EMAIL:-}")
+if [ -n "${BUCKET_NAME:-}" ]; then VARS+=(-var "bucket_name=$BUCKET_NAME"); fi
+
+tf() { terraform -chdir=infra "$@"; }
+out() { tf output -raw "$1"; }
+
+whoami_aws() {
+  echo "AWS account $(aws sts get-caller-identity --query Account --output text), region $REGION"
+}
+
+push_image() {
+  local repo
+  repo="$(out ecr_repository_url)"
+  aws ecr get-login-password | docker login --username AWS --password-stdin "${repo%%/*}"
+  # The task runs on x86, whatever this machine is.
+  docker build --platform linux/amd64 -t "$repo:latest" .
+  docker push "$repo:latest"
+}
+
+deploy() {
+  whoami_aws
+  tf init -input=false
+  tf apply "${VARS[@]}"
+  push_image
+  rm -rf data/raw/events
+  uv run python scripts/generate_fake_events.py
+  aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
+  echo
+  echo "Deployed. Bucket: $(out bucket)"
+  if [ -n "${ALERT_EMAIL:-}" ]; then
+    echo "Confirm the subscription email AWS sent to $ALERT_EMAIL, or no alerts will arrive."
+  else
+    echo "No ALERT_EMAIL was given, so nobody is told when the job fails."
+  fi
+  echo "Next: scripts/aws.sh run"
+}
+
+run() {
+  local cluster group bucket task id status code
+  cluster="$(out cluster)"
+  group="$(out log_group)"
+  bucket="$(out bucket)"
+  task="$(eval "$(out run_task_command) --query 'tasks[0].taskArn' --output text")"
+  id="${task##*/}"
+  echo "Started task $id - waiting for it to finish, usually a minute or two"
+  aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$task"
+
+  status="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" \
+    --query 'tasks[0].[stopCode,stoppedReason]' --output text)"
+  code="$(aws ecs describe-tasks --cluster "$cluster" --tasks "$task" \
+    --query 'tasks[0].containers[0].exitCode' --output text)"
+
+  echo
+  echo "--- dbt log ($group) ---"
+  aws logs get-log-events --log-group-name "$group" --log-stream-name "dbt/dbt/$id" \
+    --start-from-head --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' \
+    || echo "(no log stream - the task never started)"
+  echo
+  echo "--- summary in s3://$bucket/summary/ ---"
+  aws s3 ls "s3://$bucket/summary/" || echo "(nothing there yet)"
+  echo
+  echo "Task stopped: $status"
+  if [ "$code" = "0" ]; then
+    echo "Exit code 0 - the job passed"
+  else
+    echo "Exit code $code - the job failed"
+    return 1
+  fi
+}
+
+break_it() {
+  local seed=beer_sales/seeds/beers.csv keep
+  keep="$(mktemp)"
+  cp "$seed" "$keep"
+  # Whatever happens next, the beer list goes back as it was.
+  # shellcheck disable=SC2064 # expand the paths now: they are local to this function
+  trap "cp '$keep' '$seed'; rm -f '$keep'" EXIT
+  grep -v '^Dutty$' "$keep" > "$seed"
+  echo "Dutty is off the beer list - shipping an image that fails its test"
+  push_image
+  cp "$keep" "$seed"
+  run || true
+  echo
+  echo "That failure should reach ${ALERT_EMAIL:-the alerts topic} within a few minutes."
+  echo "Next: scripts/aws.sh fix"
+}
+
+destroy() {
+  whoami_aws
+  aws s3 rm "s3://$(out bucket)" --recursive --only-show-errors
+  tf destroy "${VARS[@]}"
+}
+
+case "${1:-}" in
+  deploy) deploy ;;
+  run) run ;;
+  break) break_it ;;
+  fix) push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
+  destroy) destroy ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
