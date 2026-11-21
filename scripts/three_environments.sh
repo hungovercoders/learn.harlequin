@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Ask the same question of the same pipeline on all three rungs, and say whether
+# Ask the same question of the same pipeline in all three environments, and say whether
 # the answers match: the laptop's file, AWS Emulator's S3 and real S3.
 #
-#   scripts/three_rungs.sh
+#   scripts/three_environments.sh
 #
-# Run it from a shell logged in to the real account. A rung that is not up is
+# Run it from a shell logged in to the real account. An environment that is not up is
 # skipped. Account ids are swapped for stand-ins, so the output is safe to screenshot.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +38,7 @@ ask() { # name, setup SQL, location
 echo "Which beers are paying the bills? One query, three places."
 
 echo
-echo "=== Rung 1 - my laptop ==="
+echo "=== 1. My laptop ==="
 local_file=data/daily_event_summary.parquet
 if [ -f "$local_file" ]; then
   echo "    $local_file"
@@ -48,7 +48,7 @@ else
 fi
 
 echo
-echo "=== Rung 2 - AWS Emulator ==="
+echo "=== 2. AWS Emulator ==="
 (
   # shellcheck source=scripts/emulator_env.sh
   source scripts/emulator_env.sh
@@ -65,7 +65,7 @@ echo "=== Rung 2 - AWS Emulator ==="
 )
 
 echo
-echo "=== Rung 3 - AWS ($REGION) ==="
+echo "=== 3. AWS ($REGION) ==="
 (
   export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
   if location="$(terraform -chdir=infra output -raw summary_location 2>/dev/null)" \
@@ -86,10 +86,10 @@ echo
 count="$(find "$answers" -type f | wc -l | tr -d ' ')"
 different="$(cat "$answers"/* 2>/dev/null | sort | uniq -c | awk -v n="$count" '$1 != n' | wc -l | tr -d ' ')"
 if [ "$count" -lt 2 ]; then
-  echo "Only $count rung answered, so there is nothing to compare."
+  echo "Only $count environment answered, so there is nothing to compare."
 elif [ "$different" = "0" ]; then
-  echo "Same answer on all $count rungs."
+  echo "Same answer in all $count environments."
 else
-  echo "The rungs disagree - they are not looking at the same events."
+  echo "The environments disagree - they are not looking at the same events."
   exit 1
 fi

@@ -102,7 +102,7 @@ up() {
     uv run dbt build
   )
   echo
-  echo "The emulator has the stack, the events and the summary. Next: scripts/three_rungs.sh"
+  echo "The emulator has the stack, the events and the summary. Next: scripts/three_environments.sh"
 }
 
 case "${1:-}" in
