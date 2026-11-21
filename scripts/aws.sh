@@ -138,7 +138,8 @@ resources() {
   group="$(out resource_group)"
   echo "--- resource group $group ---"
   aws resource-groups list-group-resources --group-name "$group" \
-    --query 'Resources[].Identifier.[ResourceType,ResourceArn]' --output text | sort | scrub
+    --query 'Resources[].Identifier.[ResourceType,ResourceArn]' --output text | sort \
+    | awk -F'\t' '{ printf "%-27s %s\n", $1, $2 }' | scrub
 }
 
 destroy() {
