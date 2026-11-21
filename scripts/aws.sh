@@ -7,6 +7,7 @@
 #   scripts/aws.sh break     ship an image with a failing test and run it, to prove the alert
 #   scripts/aws.sh fix       ship the good image again
 #   scripts/aws.sh resources list everything in the environment's resource group
+#   scripts/aws.sh query     ask the summary in S3 which beers are paying the bills
 #   scripts/aws.sh destroy   empty the bucket and remove everything
 #
 # Optional settings, as environment variables:
@@ -142,6 +143,29 @@ resources() {
     | awk -F'\t' '{ printf "%-27s %s\n", $1, $2 }' | scrub
 }
 
+query() {
+  local location sql
+  location="$(out summary_location)"
+  sql="select beer, sum(event_count) as purchases, round(sum(revenue), 2) as revenue
+from read_parquet('$location')
+where event_type = 'purchase'
+group by beer
+order by revenue desc"
+  {
+    echo "--- beer revenue, read straight from $location ---"
+    echo "$sql"
+    echo
+  } | scrub
+  (
+    # DuckDB finds credentials the way the AWS CLI does. Handing it this
+    # shell's own makes that true for an SSO login as well.
+    eval "$(aws configure export-credentials --format env 2>/dev/null)" || true
+    uv run hsql -c "install httpfs; load httpfs; install aws; load aws;
+      create or replace secret aws_s3 (type s3, provider credential_chain, region '$REGION'${S3_SECRET_OPTIONS:-});
+      $sql"
+  ) | sed '1,4{/^ Success$/d;/^-*$/d;/^ true$/d;/^(1 row)$/d;}' | scrub
+}
+
 destroy() {
   whoami_aws
   aws s3 rm "s3://$(out bucket)" --recursive --only-show-errors
@@ -154,6 +178,7 @@ case "${1:-}" in
   break) break_it ;;
   fix) push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
   resources) resources ;;
+  query) query ;;
   destroy) destroy ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
