@@ -2,6 +2,7 @@
 # Deploy, run, break and remove the beer sales job on a real AWS account.
 # Log in to AWS first, then from anywhere in the repo:
 #
+#   scripts/aws.sh bootstrap once per account: shared Terraform state and a role for GitHub Actions
 #   scripts/aws.sh deploy    infrastructure, image and events
 #   scripts/aws.sh run       run the job now, wait for it, show its log and the summary file
 #   scripts/aws.sh break     ship an image with a failing test and run it, to prove the alert
@@ -9,11 +10,18 @@
 #   scripts/aws.sh resources list everything in the environment's resource group
 #   scripts/aws.sh query     ask the summary in S3 which beers are paying the bills
 #   scripts/aws.sh destroy   empty the bucket and remove everything
+#   scripts/aws.sh summary-location   print where the summary file is, for other scripts
 #
 # Optional settings, as environment variables:
 #   AWS_REGION    where to deploy (default eu-west-2)
 #   ALERT_EMAIL   who is told when the job fails; give it on every deploy
 #   BUCKET_NAME   a bucket name of your own (default beer-sales-<account id>-<region>)
+#   AUTO_APPROVE  set to true and Terraform does not stop to ask; for GitHub Actions
+#   KEEP_EVENTS   set to true and deploy uploads events only to an empty bucket; for GitHub Actions
+#   GITHUB_REPO   the owner/name allowed to deploy (default: this clone's origin); bootstrap only
+#
+# Terraform's state is a file in infra/ until bootstrap has been run. After that it
+# lives in S3, where a laptop and GitHub Actions both find it.
 #
 # The report from run and break has the account id and alert email swapped for
 # stand-ins, so it is safe to screenshot. Terraform and docker output is not.
@@ -31,10 +39,40 @@ export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION" AWS_PAGER=""
 VARS=(-var "region=$REGION" -var "alert_email=${ALERT_EMAIL:-}")
 if [ -n "${BUCKET_NAME:-}" ]; then VARS+=(-var "bucket_name=$BUCKET_NAME"); fi
 
+# Left unquoted where it is used, so that empty means no argument at all.
+APPROVE=""
+if [ "${AUTO_APPROVE:-}" = "true" ]; then APPROVE="-auto-approve"; fi
+
 tf() { terraform -chdir=infra "$@"; }
 out() { tf output -raw "$1"; }
 
 account() { aws sts get-caller-identity --query Account --output text; }
+
+state_bucket() { echo "beer-sales-tfstate-$(account)-$REGION"; }
+
+# Point Terraform at the state: the bucket bootstrap made if this account has one,
+# a file in infra/ if not. The override file is how the emulator, which never
+# shares state, gets to use the same infra/ with no backend in it.
+init() {
+  local bucket how="${1:--reconfigure}"
+  bucket="$(state_bucket)"
+  if aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+    cat > infra/backend_override.tf <<EOF
+terraform {
+  backend "s3" {
+    bucket       = "$bucket"
+    key          = "beer-sales/terraform.tfstate"
+    region       = "$REGION"
+    use_lockfile = true
+  }
+}
+EOF
+  else
+    rm -f infra/backend_override.tf
+  fi
+  # shellcheck disable=SC2086 # how is one flag or two
+  tf init -input=false $how >/dev/null
+}
 
 # What this script prints ends up in screenshots, so the account id and the
 # alert email are swapped for stand-ins on the way out.
@@ -64,16 +102,53 @@ push_image() {
   docker push "$repo:latest"
 }
 
+github_repo() {
+  local url
+  url="$(git remote get-url origin)"
+  url="${url%.git}"
+  echo "${GITHUB_REPO:-$(echo "$url" | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#')}"
+}
+
+bootstrap() {
+  local repo provider=true
+  repo="$(github_repo)"
+  whoami_aws
+  echo "GitHub repository allowed to deploy: $repo"
+  # An account has one GitHub identity provider at most, and another project may have made it.
+  if aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text \
+    | grep -q 'oidc-provider/token.actions.githubusercontent.com'; then
+    provider=false
+  fi
+  terraform -chdir=infra/bootstrap init -input=false >/dev/null
+  terraform -chdir=infra/bootstrap apply $APPROVE -var "region=$REGION" \
+    -var "github_repository=$repo" -var "create_oidc_provider=$provider"
+  # Anything already deployed from this laptop moves into the shared state with it.
+  init "-migrate-state -force-copy"
+  rm -f infra/terraform.tfstate infra/terraform.tfstate.backup
+  echo
+  echo "Bootstrapped. In the GitHub repository's settings, under secrets and variables for Actions, add:"
+  echo "  secret   AWS_DEPLOY_ROLE_ARN   $(terraform -chdir=infra/bootstrap output -raw deploy_role_arn)"
+  echo "  secret   ALERT_EMAIL           the address told when the job fails"
+  echo "  variable AWS_REGION            $REGION"
+  echo "  variable DEPLOY_TO_AWS         true"
+  echo "The role's ARN has your account id in it, so do not screenshot the first of those."
+}
+
 deploy() {
   whoami_aws
-  tf init -input=false
-  tf apply "${VARS[@]}"
+  tf apply $APPROVE "${VARS[@]}"
   push_image
-  # The same events as the laptop and the emulator, so all three can be compared.
-  if [ ! -d data/raw/events ]; then
-    uv run python scripts/generate_fake_events.py
+  if [ "${KEEP_EVENTS:-}" = "true" ] && aws s3 ls "s3://$(out bucket)/raw/events/" | grep -q .; then
+    # Every run of the generator makes different events, so a deploy from GitHub
+    # Actions leaves the ones in the bucket alone, as it would a source system's.
+    echo "The bucket already has events; leaving them as they are"
+  else
+    # The same events as the laptop and the emulator, so all three can be compared.
+    if [ ! -d data/raw/events ]; then
+      uv run python scripts/generate_fake_events.py
+    fi
+    aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   fi
-  aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   echo
   echo "Deployed. Bucket: $(out bucket)" | scrub
   if [ -n "${ALERT_EMAIL:-}" ]; then
@@ -171,16 +246,18 @@ order by revenue desc"
 destroy() {
   whoami_aws
   aws s3 rm "s3://$(out bucket)" --recursive --only-show-errors
-  tf destroy "${VARS[@]}"
+  tf destroy $APPROVE "${VARS[@]}"
 }
 
 case "${1:-}" in
-  deploy) deploy ;;
-  run) run ;;
-  break) break_it ;;
-  fix) push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
-  resources) resources ;;
-  query) query ;;
-  destroy) destroy ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  bootstrap) bootstrap ;;
+  deploy) init; deploy ;;
+  run) init; run ;;
+  break) init; break_it ;;
+  fix) init; push_image; echo "The good image is back. Next: scripts/aws.sh run" ;;
+  resources) init; resources ;;
+  summary-location) init; out summary_location ;;
+  query) init; query ;;
+  destroy) init; destroy ;;
+  *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

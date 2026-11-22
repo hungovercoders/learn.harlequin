@@ -1,3 +1,7 @@
 [tools]
-# Applies infra/ to AWS Emulator and to AWS. Tested with 1.14; infra/main.tf needs 1.6 or later.
+# Applies infra/ to AWS Emulator and to AWS. Tested with 1.14; infra/bootstrap needs 1.10 or later.
 terraform = "1.14"
+# Runs the Taskfile, on a laptop and in GitHub Actions alike.
+task = "3"
+# Python and its packages, from pyproject.toml and uv.lock.
+uv = "latest"

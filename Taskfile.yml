@@ -1,0 +1,124 @@
+# One front door for the repo. `task` on its own lists everything.
+# The work is done by the sh files in scripts/; the names here are what a laptop
+# and GitHub Actions both call, so a check that passes on one passes on the other.
+version: '3'
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install the Python dependencies
+    cmds:
+      - uv sync
+
+  events:
+    desc: Generate the fake beer shop events, if they are not there already
+    status:
+      - test -d data/raw/events
+    cmds:
+      - uv run python scripts/generate_fake_events.py
+
+  build:
+    desc: Run dbt build on the laptop
+    deps: [events]
+    dir: beer_sales
+    env:
+      DBT_PROFILES_DIR: '{{.ROOT_DIR}}/beer_sales'
+    cmds:
+      - uv run dbt build
+
+  lint:
+    desc: Check the Terraform is formatted and valid, and the scripts parse
+    cmds:
+      - terraform fmt -check -recursive infra
+      - terraform -chdir=infra/bootstrap init -backend=false -input=false > /dev/null
+      - terraform -chdir=infra/bootstrap validate
+      - bash -n scripts/aws.sh scripts/emulator.sh scripts/emulator_env.sh scripts/three_environments.sh
+
+  emulator:start:
+    desc: Run AWS Emulator in this terminal and leave it running
+    cmds:
+      - scripts/emulator.sh start
+
+  emulator:background:
+    desc: Run AWS Emulator behind this terminal and wait until it answers
+    cmds:
+      - scripts/emulator.sh background
+
+  emulator:stop:
+    desc: Stop an emulator started with emulator:background
+    cmds:
+      - scripts/emulator.sh stop
+
+  emulator:up:
+    desc: Apply infra/ to the emulator, upload the events and run dbt build against its S3
+    cmds:
+      - scripts/emulator.sh up
+
+  emulator:container:
+    desc: Run the job's image against the emulator's S3
+    cmds:
+      - scripts/emulator.sh container
+
+  emulator:check:
+    desc: Prove the summary is in the emulator's S3 and can be queried
+    cmds:
+      - scripts/emulator.sh check
+
+  ci:
+    desc: Everything a pull request is checked for; needs nothing but this machine
+    cmds:
+      - task: lint
+      - task: emulator:background
+      - defer: { task: emulator:stop }
+      - task: emulator:up
+      - task: emulator:container
+      - task: emulator:check
+
+  aws:bootstrap:
+    desc: Once per AWS account - shared Terraform state and a role for GitHub Actions
+    cmds:
+      - scripts/aws.sh bootstrap
+
+  aws:deploy:
+    desc: Apply infra/ to AWS, push the image and upload the events
+    cmds:
+      - scripts/aws.sh deploy
+
+  aws:run:
+    desc: Run the job on AWS now, wait for it and show its log
+    cmds:
+      - scripts/aws.sh run
+
+  aws:break:
+    desc: Ship an image with a failing test and run it, to prove the alert
+    cmds:
+      - scripts/aws.sh break
+
+  aws:fix:
+    desc: Ship the good image again
+    cmds:
+      - scripts/aws.sh fix
+
+  aws:resources:
+    desc: List everything in the environment's resource group
+    cmds:
+      - scripts/aws.sh resources
+
+  aws:query:
+    desc: Ask the summary in S3 which beers are paying the bills
+    cmds:
+      - scripts/aws.sh query
+
+  aws:destroy:
+    desc: Empty the bucket and remove everything from AWS
+    cmds:
+      - scripts/aws.sh destroy
+
+  compare:
+    desc: Ask one question of the laptop, the emulator and AWS, and say whether they agree
+    cmds:
+      - scripts/three_environments.sh
