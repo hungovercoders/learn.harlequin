@@ -259,5 +259,5 @@ case "${1:-}" in
   summary-location) init; out summary_location ;;
   query) init; query ;;
   destroy) init; destroy ;;
-  *) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
