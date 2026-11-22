@@ -1,0 +1,35 @@
+# Every pull request stands the whole thing up on AWS Emulator inside the runner:
+# the Terraform, the events, dbt against the emulator's S3 and the job's own image.
+# It needs no AWS account and no secrets, so it is safe to run for anyone's pull request.
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  emulator:
+    name: Build and test on AWS Emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Terraform, Task and uv at the versions in mise.toml.
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+
+      - run: task setup
+
+      # The same command as on a laptop.
+      - run: task ci
+
+      - name: Show the emulator's log if anything failed
+        if: failure()
+        run: tail -100 .tools/emulator.log || true

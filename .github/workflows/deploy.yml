@@ -1,0 +1,69 @@
+# A merge to main deploys to AWS and runs the job once to prove it.
+# Nothing happens until the repository variable DEPLOY_TO_AWS is true, and the
+# role can only be taken on from main - see scripts/aws.sh bootstrap.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - beer_sales/**
+      - infra/**
+      - scripts/**
+      - Dockerfile
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        options: [deploy, destroy]
+        default: deploy
+
+permissions:
+  contents: read
+  id-token: write # lets the job prove to AWS which repository and branch it is
+
+# One deploy at a time, and never cancel one halfway through a Terraform apply.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  aws:
+    name: ${{ inputs.action || 'deploy' }} on AWS
+    if: vars.DEPLOY_TO_AWS == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
+      ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+      AUTO_APPROVE: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78 # v5.3.0
+
+      # No access key is stored anywhere. GitHub vouches for the workflow and AWS
+      # hands back credentials that last an hour.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - run: task setup
+
+      - name: Deploy
+        if: (inputs.action || 'deploy') == 'deploy'
+        run: task aws:deploy
+
+      - name: Run the job once
+        if: (inputs.action || 'deploy') == 'deploy'
+        run: task aws:run
+
+      - name: Destroy
+        if: inputs.action == 'destroy'
+        run: task aws:destroy

@@ -32,3 +32,6 @@ data/
 
 # Tools the scripts download
 .tools/
+
+# Written by scripts/aws.sh when the account keeps Terraform's state in S3
+infra/backend_override.tf

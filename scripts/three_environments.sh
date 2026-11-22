@@ -68,7 +68,7 @@ echo
 echo "=== 3. AWS ($REGION) ==="
 (
   export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
-  if location="$(terraform -chdir=infra output -raw summary_location 2>/dev/null)" \
+  if location="$(scripts/aws.sh summary-location 2>/dev/null)" \
     && account="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" \
     && aws s3 ls "$location" >/dev/null 2>&1; then
     echo "    ${location//$account/123456789012}"
