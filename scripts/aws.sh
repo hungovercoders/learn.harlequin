@@ -17,6 +17,7 @@
 #   ALERT_EMAIL   who is told when the job fails; give it on every deploy
 #   BUCKET_NAME   a bucket name of your own (default beer-sales-<account id>-<region>)
 #   AUTO_APPROVE  set to true and Terraform does not stop to ask; for GitHub Actions
+#   KEEP_EVENTS   set to true and deploy uploads events only to an empty bucket; for GitHub Actions
 #   GITHUB_REPO   the owner/name allowed to deploy (default: this clone's origin); bootstrap only
 #
 # Terraform's state is a file in infra/ until bootstrap has been run. After that it
@@ -137,11 +138,17 @@ deploy() {
   whoami_aws
   tf apply $APPROVE "${VARS[@]}"
   push_image
-  # The same events as the laptop and the emulator, so all three can be compared.
-  if [ ! -d data/raw/events ]; then
-    uv run python scripts/generate_fake_events.py
+  if [ "${KEEP_EVENTS:-}" = "true" ] && aws s3 ls "s3://$(out bucket)/raw/events/" | grep -q .; then
+    # Every run of the generator makes different events, so a deploy from GitHub
+    # Actions leaves the ones in the bucket alone, as it would a source system's.
+    echo "The bucket already has events; leaving them as they are"
+  else
+    # The same events as the laptop and the emulator, so all three can be compared.
+    if [ ! -d data/raw/events ]; then
+      uv run python scripts/generate_fake_events.py
+    fi
+    aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   fi
-  aws s3 sync data/raw/events "s3://$(out bucket)/raw/events/" --delete --only-show-errors
   echo
   echo "Deployed. Bucket: $(out bucket)" | scrub
   if [ -n "${ALERT_EMAIL:-}" ]; then
@@ -252,5 +259,5 @@ case "${1:-}" in
   summary-location) init; out summary_location ;;
   query) init; query ;;
   destroy) init; destroy ;;
-  *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

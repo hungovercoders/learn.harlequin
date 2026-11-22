@@ -41,6 +41,7 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-2' }}
       ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
       AUTO_APPROVE: 'true'
+      KEEP_EVENTS: 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
